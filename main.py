@@ -224,7 +224,8 @@ def update(lastUpdateTime, dt):
     ### LANDER CONTROLS ###
     # do not accept control if no fuel
     if (lander.fuel <= 0): return
-    
+
+    # upwards thruster key
     if (keysDown.get(SpecialKey.up)):
         lander.acceleration.x = Lander.thrusterStrength * math.sin(math.radians(lander.rotation))
         lander.acceleration.y = gravity + Lander.thrusterStrength * math.cos(math.radians(lander.rotation))
@@ -243,6 +244,7 @@ def update(lastUpdateTime, dt):
             
             lastFuelParticle = lastUpdateTime
 
+    # rotation keys
     if (keysDown.get(SpecialKey.left)):
         lander.rotationVelocity = -Lander.sideThrusterStrength
         lander.fuel -= Lander.fuelConsumptionRate * dt * 0.5
@@ -250,8 +252,9 @@ def update(lastUpdateTime, dt):
         lander.rotationVelocity = Lander.sideThrusterStrength
         lander.fuel -= Lander.fuelConsumptionRate * dt * 0.5
 
+## DRAWING FUNCTIONS ##
+        
 def drawTerrain():
-    #renderCoordinates = None
     glBegin(GL_TRIANGLES)
     glColor(0.65, 0.7, 0.7)
     
@@ -275,7 +278,7 @@ def drawTerrain():
     glEnd()
 
 def drawLandingArea():
-    glBegin(GL_POLYGON)
+    glBegin(GL_POLYGON) # simple rectangle
     glColor(1.0, 1.0, 0.0)
 
     left = w2r(landingAreaPosition)
@@ -285,13 +288,17 @@ def drawLandingArea():
 
     right = w2r(landingAreaPositionRight)
 
+    # draw first two points on surface
     glVertex2f(left.x, left.y)
     glVertex2f(right.x, right.y)
 
+    # fade out gradient
     glColor(0.0, 1.0, 0.0, 0.0)
-    
+
+    # to bottom of screen
     glVertex2f(right.x, -1)
     glVertex2f(left.x, -1)
+    
     glEnd()
 
 def drawLander():
@@ -300,6 +307,7 @@ def drawLander():
     topLeft = w2r(Vector2(lander.position.x - lander.size.x/2, lander.position.y + lander.size.y/2))
     topRight = w2r(Vector2(lander.position.x + lander.size.x/2, lander.position.y + lander.size.y/2))
 
+    # apply rotation matrix to following draw calls
     glPushMatrix()
     glTranslatef(w2r(lander.position).x, w2r(lander.position).y, 0)
     glRotate(-lander.rotation, 0, 0, 1)
@@ -323,7 +331,8 @@ def drawStars():
         glColor(opacity, opacity, opacity)
         glVertex2f(aspectRatio*stars[i][0]/2000, stars[i][1]/2000)
     glEnd()
-        
+
+# very similar to lander.. maybe i could create a drawRectangle function
 def drawFuelParticles():
     for particle in fuelParticles:
 
@@ -342,6 +351,7 @@ def drawFuelParticles():
 
         glBegin(GL_POLYGON)
 
+        # flicker colour every frame - cool effect
         redFlicker = random.uniform(0.6, 0.9)
         greenFlicker = random.uniform(0.3, 0.6)
         
@@ -362,6 +372,7 @@ def render():
     drawTerrain()
     drawLandingArea()
     drawLander()
+    
     glutSwapBuffers()
 
 # Initialise OpenGL window
@@ -392,9 +403,8 @@ glEnable(GL_BLEND)
 glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 glClearColor(0.0, 0.0, 0.05, 1.0)
 
-createStars()
-createTerrain()
-
-lander = Lander()
+# initialize first game
+lander = None
+restartGame()
 
 glutMainLoop()
