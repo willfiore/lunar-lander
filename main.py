@@ -33,7 +33,7 @@ class Vector2:
         self.y = y
 
 class Lander:    
-    startingFuel = 100
+    startingFuel = 65
     fuelConsumptionRate = 10 # fuel consumed per second
     
     thrusterStrength = 55 # make this larger than gravity!
@@ -70,6 +70,9 @@ class FuelParticle:
 
 DEFAULT_WINDOW_WIDTH  = 720
 DEFAULT_WINDOW_HEIGHT = 480
+WINDOW_WIDTH = 720
+WINDOW_HEIGHT = 480
+
 aspectRatio = DEFAULT_WINDOW_WIDTH / DEFAULT_WINDOW_HEIGHT # dynamically changed on resize
 
 gameState = GameState.startScreen
@@ -80,15 +83,15 @@ terrainPointDensity = 25 # lower numbers create more rocky terrain
 terrainMinHeight = 20
 terrainStartHeight = 100
 terrainMaxHeight = 400
-terrainVariation = 20
+terrainVariation = 10
 terrainPoints = []
 
 landingAreaPosition = Vector2(0,0) # top-left coordinate of the landing area
-landingAreaWidth = Lander.size.x + 20
+landingAreaWidth = 0
 
 gravity = -30
 
-numStars = 1000
+numStars = 300
 stars = []
 
 fuelParticles = []
@@ -115,6 +118,9 @@ def createTerrain():
     firstPoint = Vector2(0, random.randint(terrainMinHeight, (terrainMaxHeight + terrainMinHeight)/2))
     
     global landingAreaPosition
+    global landingAreaWidth
+    # randomize landing area width to an extent
+    landingAreaWidth = Lander.size.x + random.randint(10, 40)
     # pick a random x position for the landing area
     landingAreaPosition = Vector2(random.randint(0, glutGet(GLUT_WINDOW_WIDTH) - landingAreaWidth), 0)    
     doneLandingArea = False
@@ -364,7 +370,44 @@ def drawFuelParticles():
 
         glPopMatrix()
 
-def render():    
+
+fuelBarWidth = 20
+fuelBarHeight = 200
+def drawFuelBar():
+    fuelPercentage = lander.fuel / lander.startingFuel
+    # draw bg
+    glBegin(GL_POLYGON)
+    glColor(0.5, 0.5, 0.5)
+    topLeft = w2r(Vector2(20, WINDOW_HEIGHT - 20))
+    topRight = w2r(Vector2(20 + fuelBarWidth, WINDOW_HEIGHT - 20))
+    bottomLeft = w2r(Vector2(20, WINDOW_HEIGHT - (20 + fuelBarHeight)))
+    bottomRight = w2r(Vector2(20 + fuelBarWidth, WINDOW_HEIGHT - (20 + fuelBarHeight)))
+
+    glVertex2f(topLeft.x, topLeft.y)
+    glVertex2f(topRight.x, topRight.y)
+    glVertex2f(bottomRight.x, bottomRight.y)
+    glVertex2f(bottomLeft.x, bottomLeft.y)
+    glEnd()
+    
+    # draw bar
+    glBegin(GL_POLYGON)
+    glColor(1.0, 0.0, 0.0)
+
+    barHeight = fuelBarHeight * fuelPercentage
+    barTopLeft = w2r(Vector2(20, WINDOW_HEIGHT - 20 - fuelBarHeight + barHeight))
+    barTopRight = w2r(Vector2(20 + fuelBarWidth, WINDOW_HEIGHT - 20 - fuelBarHeight + barHeight))
+    
+    glVertex2f(bottomRight.x, bottomRight.y)
+    glVertex2f(bottomLeft.x, bottomLeft.y)
+
+    # fade top of fuel bar from yellow to red
+    glColor(1.0, fuelPercentage, 0.0)
+    
+    glVertex2f(barTopLeft.x, barTopLeft.y)
+    glVertex2f(barTopRight.x, barTopRight.y)
+    glEnd()
+
+def render():
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     
     drawStars()
@@ -372,6 +415,7 @@ def render():
     drawTerrain()
     drawLandingArea()
     drawLander()
+    drawFuelBar()
     
     glutSwapBuffers()
 
@@ -388,6 +432,12 @@ def onWindowResize(width, height):
     glMatrixMode(GL_PROJECTION)
     glLoadIdentity()
     gluOrtho2D(-1.0 * aspectRatio, 1.0 * aspectRatio, -1.0, 1.0)
+    
+    global WINDOW_WIDTH
+    global WINDOW_HEIGHT
+
+    WINDOW_WIDTH = width
+    WINDOW_HEGHT = height
 
 # Set GLUT function hooks
 glutKeyboardFunc(keyboardDown)
