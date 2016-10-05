@@ -21,6 +21,14 @@ from enum import Enum, IntEnum
 class GameState(Enum):
     startScreen = 0
     ingame = 1
+    postgame = 2
+
+class PostGameState(Enum):
+    none = 0
+    success = 1
+    tooFast = 2
+    sideways = 3
+    missedLandingArea = 4
 
 class SpecialKey(IntEnum):
     left = 100
@@ -33,11 +41,14 @@ class Vector2:
         self.y = y
 
 class Lander:    
-    startingFuel = 65
+    startingFuel = 100
     fuelConsumptionRate = 10 # fuel consumed per second
     
     thrusterStrength = 55 # make this larger than gravity!
     sideThrusterStrength = 2
+
+    maxLandingVelocity = 40
+    maxLandingRotation = 10
 
     size = Vector2(20, 25)
     
@@ -51,6 +62,8 @@ class Lander:
         #self.rotationAcceleration = 0
         
         self.fuel = self.startingFuel
+        self.hitGround = False
+        self.visible = True
 
 class FuelParticle:
     speed = 3
@@ -75,7 +88,8 @@ WINDOW_HEIGHT = 480
 
 aspectRatio = DEFAULT_WINDOW_WIDTH / DEFAULT_WINDOW_HEIGHT # dynamically changed on resize
 
-gameState = GameState.startScreen
+gameState = GameState.ingame
+postGameState = PostGameState.none
 
 keysDown = {}
 
@@ -83,7 +97,9 @@ terrainPointDensity = 25 # lower numbers create more rocky terrain
 terrainMinHeight = 20
 terrainStartHeight = 100
 terrainMaxHeight = 400
-terrainVariation = 10
+terrainVariationY = 10
+terrainMinXSpacing = 12
+terrainMaxXSpacing = 15
 terrainPoints = []
 
 landingAreaPosition = Vector2(0,0) # top-left coordinate of the landing area
@@ -96,6 +112,9 @@ stars = []
 
 fuelParticles = []
 
+fuelBarWidth = 20
+fuelBarHeight = 200
+
 # w2r: converts world coordinates to render coordinates
 def w2r(coordinates):
     windowWidth = glutGet(GLUT_WINDOW_WIDTH)
@@ -103,6 +122,16 @@ def w2r(coordinates):
     x = aspectRatio*(2*(coordinates.x / windowWidth) - 1)
     y = 2*(coordinates.y / windowHeight) - 1
     return Vector2(x, y)
+
+def rotateAround(point, origin, angle):
+    angle = math.radians(angle) # convert angle to radians
+
+    diff = Vector2(point.x - origin.x, point.y - origin.y)
+    trans = Vector2(diff.x * math.cos(angle) - diff.y * math.sin(angle),
+                    diff.x * math.sin(angle) + diff.y * math.cos(angle))
+
+    point.x = origin.x + trans.x
+    point.y = origin.y + trans.y
 
 def createStars():
     del stars[:]
@@ -132,9 +161,9 @@ def createTerrain():
         point = copy.copy(prevPoint)
 
         # slightly randomize x position of next point
-        point.x += random.randint(12, 15)
+        point.x += random.randint(terrainMinXSpacing, terrainMaxXSpacing)
         # y position randomized but close to previous point (and not exceeding max and min height)
-        point.y = random.randint(max(terrainMinHeight, prevPoint.y - terrainVariation), min(terrainMaxHeight, prevPoint.y + terrainVariation))
+        point.y = random.randint(max(terrainMinHeight, prevPoint.y - terrainVariationY), min(terrainMaxHeight, prevPoint.y + terrainVariationY))
 
         # create landing area
         if(point.x >= landingAreaPosition.x and not doneLandingArea):
@@ -152,7 +181,85 @@ def createTerrain():
         else:
             terrainPoints.append(copy.copy(point))
 
+def doCollisionDetection():
+    # line intersection helper functions
+    # taken from http://bryceboe.com/2006/10/23/line-segment-intersection-algorithm/
+    def ccw(A, B, C):
+        return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x)
+    
+    def intersect(A, B, C, D):
+        return ccw(A, C, D) != ccw(B, C, D) and ccw(A, B, C) != ccw(A, B, D)
+            
+    landerCorners = [Vector2(lander.position.x - lander.size.x/2, lander.position.y + lander.size.y/2),
+                     Vector2(lander.position.x + lander.size.x/2, lander.position.y + lander.size.y/2),
+                     Vector2(lander.position.x + lander.size.x/2, lander.position.y - lander.size.y/2),
+                     Vector2(lander.position.x - lander.size.x/2, lander.position.y - lander.size.y/2)]
+
+    # rotate corners
+    for i in range(len(landerCorners)):
+        rotateAround(landerCorners[i], lander.position, -lander.rotation)
+
+    # collect the terrain points we need to analyse
+    # simple bounding box: terrain bisecting lander cannot be outside this range
+    minTerrainX = lander.position.x - max(lander.size.x, lander.size.y)/2 - max(terrainMaxXSpacing, landingAreaWidth)
+    maxTerrainX = lander.position.x + max(lander.size.x, lander.size.y)/2 + max(terrainMaxXSpacing, landingAreaWidth)
+
+    terrainToCheck = []
+    for point in terrainPoints:
+        # start from the left:
+        # if we havent reached minTerrainX, continue to next point
+        if point.x < minTerrainX: continue
+        # if we have gone too far, break out of the loop
+        if point.x > maxTerrainX: break
+        terrainToCheck.append(point) # found a good point!
+
+    for i in range(len(terrainToCheck) - 1):
+        terrain1 = terrainToCheck[i]
+        terrain2 = terrainToCheck[i+1]
+
+        for j in range(len(landerCorners)):
+            lander1 = landerCorners[j]
+            lander2 = landerCorners[j+1] if j < 3 else landerCorners[0]
+
+            if (intersect(terrain1, terrain2, lander1, lander2)):
+                lander.hitGround = True
+
+                global postGameState
+                if (abs(lander.velocity.y) > Lander.maxLandingVelocity):
+                    explodeLander()
+                    postGameState = PostGameState.tooFast
+                elif (terrain1.x != landingAreaPosition.x):
+                    explodeLander()
+                    postGameState = PostGameState.missedLandingArea
+                elif (abs(lander.rotation) > Lander.maxLandingRotation):
+                    explodeLander()
+                    postGameState = PostGameState.sideways
+                else:
+                    onSuccessfulLanding()
+                    postGameState = PostGameState.success
+
+                return
+
+def onSuccessfulLanding():
+    lander.rotation = 0
+
+def explodeLander():
+    lander.visible = False
+
+    numExplosionParticles = 20
+    for i in range(numExplosionParticles):
+        fuelParticle = FuelParticle(lander.position.x, lander.position.y)
+        fuelParticle.velocity.x = -FuelParticle.speed * math.sin(math.radians((i/numExplosionParticles)*360 + random.randint(-25, 25)))
+        fuelParticle.velocity.y = -FuelParticle.speed * math.cos(math.radians((i/numExplosionParticles)*360 + random.randint(-25, 25)))
+        fuelParticle.rotation = random.randint(0, 90)
+        fuelParticle.rotationVelocity = 1 if random.randrange(2) else -1
+        fuelParticle.lifetime = FuelParticle.defaultLifetime*2
+        fuelParticles.append(fuelParticle)
+    
+            
 def restartGame():
+    global postGameState
+    postGameState = PostGameState.none
     createStars()
     createTerrain()
     respawnLander()
@@ -200,21 +307,31 @@ lastFuelParticle = 0
 def update(lastUpdateTime, dt):
     dt = dt / 1000 # convert dt to seconds (to work nicely with physics equations)
 
-    ### LANDER PHYSICS ###    
-    # using velocity verlet integration for more precision
-    lander.position.x += dt * (lander.velocity.x + dt * lander.acceleration.x / 2)
-    lander.position.y += dt * (lander.velocity.y + dt * lander.acceleration.y / 2)
+    if (not lander.hitGround):
+        ### LANDER PHYSICS ###    
+        # using velocity verlet integration for more precision at a fixed timestep
+        lander.position.x += dt * (lander.velocity.x + dt * lander.acceleration.x / 2)
+        lander.position.y += dt * (lander.velocity.y + dt * lander.acceleration.y / 2)
+        
+        # just euler integration for velocity
+        lander.velocity.x += dt * lander.acceleration.x
+        lander.velocity.y += dt * lander.acceleration.y
+        
+        lander.rotation += lander.rotationVelocity
 
-    # just euler integration for velocity
-    lander.velocity.x += dt * lander.acceleration.x
-    lander.velocity.y += dt * lander.acceleration.y
-    
-    lander.rotation += lander.rotationVelocity
+        # wrap rotation values
+        while (lander.rotation >= 180):
+            lander.rotation -= 360
 
-    # initialise default lander movement values
-    lander.acceleration.x = 0
-    lander.acceleration.y = gravity
-    lander.rotationVelocity = 0
+        while (lander.rotation < -180):
+            lander.rotation += 360
+            
+        # initialise default lander movement values
+        lander.acceleration.x = 0
+        lander.acceleration.y = gravity
+        lander.rotationVelocity = 0
+
+        doCollisionDetection()
 
     ### FUEL PARTICLE PHYSICS ###
     for particle in fuelParticles[:]:
@@ -228,8 +345,12 @@ def update(lastUpdateTime, dt):
             fuelParticles.remove(particle)
 
     ### LANDER CONTROLS ###
-    # do not accept control if no fuel
-    if (lander.fuel <= 0): return
+    # do not accept control if no fuel or touched ground
+    if (lander.fuel <= 0):
+        lander.fuel = 0
+        return
+    if (lander.hitGround):
+        return
 
     # upwards thruster key
     if (keysDown.get(SpecialKey.up)):
@@ -308,27 +429,28 @@ def drawLandingArea():
     glEnd()
 
 def drawLander():
-    bottomLeft = w2r(Vector2(lander.position.x - lander.size.x/2, lander.position.y - lander.size.y/2))
-    bottomRight = w2r(Vector2(lander.position.x + lander.size.x/2, lander.position.y - lander.size.y/2))
-    topLeft = w2r(Vector2(lander.position.x - lander.size.x/2, lander.position.y + lander.size.y/2))
-    topRight = w2r(Vector2(lander.position.x + lander.size.x/2, lander.position.y + lander.size.y/2))
+    if not lander.visible: return
+    # establish corners before rotation
+    landerCorners = [Vector2(lander.position.x - lander.size.x/2, lander.position.y + lander.size.y/2),
+                     Vector2(lander.position.x + lander.size.x/2, lander.position.y + lander.size.y/2),
+                     Vector2(lander.position.x + lander.size.x/2, lander.position.y - lander.size.y/2),
+                     Vector2(lander.position.x - lander.size.x/2, lander.position.y - lander.size.y/2)]
 
-    # apply rotation matrix to following draw calls
-    glPushMatrix()
-    glTranslatef(w2r(lander.position).x, w2r(lander.position).y, 0)
-    glRotate(-lander.rotation, 0, 0, 1)
-    glTranslatef(-w2r(lander.position).x, -w2r(lander.position).y, 0)
+    # rotate and convert corners to screen coordinates
+    for i in range(len(landerCorners)):
+        rotateAround(landerCorners[i], lander.position, -lander.rotation)
+        landerCorners[i] = w2r(landerCorners[i])
 
     glBegin(GL_POLYGON)
-    glColor(0.7, 0.7, 0.7, 1.0)
-    glVertex2f(bottomLeft.x, bottomLeft.y)
-    glVertex2f(bottomRight.x, bottomRight.y)
     glColor(1.0, 1.0, 1.0, 1.0)
-    glVertex2f(topRight.x, topRight.y)
-    glVertex2f(topLeft.x, topLeft.y)
+    glVertex2f(landerCorners[0].x, landerCorners[0].y)
+    glVertex2f(landerCorners[1].x, landerCorners[1].y)
+    glColor(0.7, 0.7, 0.7, 1.0)
+    glVertex2f(landerCorners[2].x, landerCorners[2].y)
+    glVertex2f(landerCorners[3].x, landerCorners[3].y)
     glEnd()
     
-    glPopMatrix()
+    # glPopMatrix()
 
 def drawStars():
     glBegin(GL_POINTS)
@@ -345,34 +467,27 @@ def drawFuelParticles():
         # randomize size every frame + get larger towards end of life
         particle.size = random.uniform(FuelParticle.defaultSize -1, FuelParticle.defaultSize + 1) + (particle.currentLifetime/particle.lifetime)*10
         
-        topLeft = w2r(Vector2(particle.position.x - particle.size, particle.position.y + particle.size))
-        topRight = w2r(Vector2(particle.position.x + particle.size, particle.position.y + particle.size))
-        bottomLeft = w2r(Vector2(particle.position.x - particle.size, particle.position.y - particle.size))
-        bottomRight = w2r(Vector2(particle.position.x + particle.size, particle.position.y - particle.size))
+        fuelParticleCorners = [Vector2(particle.position.x - particle.size, particle.position.y + particle.size),
+                               Vector2(particle.position.x + particle.size, particle.position.y + particle.size),
+                               Vector2(particle.position.x + particle.size, particle.position.y - particle.size),
+                               Vector2(particle.position.x - particle.size, particle.position.y - particle.size)]
 
-        glPushMatrix()
-        glTranslatef(w2r(particle.position).x, w2r(particle.position).y, 0)
-        glRotate(-particle.rotation, 0, 0, 1)
-        glTranslatef(-w2r(particle.position).x, -w2r(particle.position).y, 0)
-
-        glBegin(GL_POLYGON)
+        for i in range(len(fuelParticleCorners)):
+            rotateAround(fuelParticleCorners[i], particle.position, particle.rotation)
+            fuelParticleCorners[i] = w2r(fuelParticleCorners[i])
 
         # flicker colour every frame - cool effect
         redFlicker = random.uniform(0.6, 0.9)
         greenFlicker = random.uniform(0.3, 0.6)
-        
+            
+        glBegin(GL_POLYGON)        
         glColor4f(redFlicker, greenFlicker, 0, 0.7 * (particle.lifetime - particle.currentLifetime)/particle.lifetime)
-        glVertex2f(topLeft.x, topLeft.y)
-        glVertex2f(topRight.x, topRight.y)
-        glVertex2f(bottomRight.x, bottomRight.y)
-        glVertex2f(bottomLeft.x, bottomLeft.y)
+
+        for i in range(len(fuelParticleCorners)):
+            glVertex2f(fuelParticleCorners[i].x, fuelParticleCorners[i].y)
         glEnd()
 
-        glPopMatrix()
 
-
-fuelBarWidth = 20
-fuelBarHeight = 200
 def drawFuelBar():
     fuelPercentage = lander.fuel / lander.startingFuel
     # draw bg
@@ -407,6 +522,40 @@ def drawFuelBar():
     glVertex2f(barTopRight.x, barTopRight.y)
     glEnd()
 
+    # write fuel number next to bar
+    fuelString = str(math.floor(lander.fuel))
+    drawText(Vector2(20 + 10 + fuelBarWidth, WINDOW_HEIGHT - 20 - 10 - fuelBarHeight + barHeight),
+             GLUT_BITMAP_9_BY_15, fuelString, 1.0, fuelPercentage, 0.0)
+
+def drawControls():
+    drawText(Vector2(WINDOW_WIDTH - 180, WINDOW_HEIGHT - 22), GLUT_BITMAP_9_BY_15, "Arrow keys to move", 1.0, 1.0, 1.0)
+    drawText(Vector2(WINDOW_WIDTH - 125, WINDOW_HEIGHT - 40), GLUT_BITMAP_9_BY_15, "R to restart", 1.0, 1.0, 1.0)
+
+def drawSuccessText():
+    drawText(Vector2(WINDOW_WIDTH / 2 - (21*9+21)/2, WINDOW_HEIGHT / 2 + 70), GLUT_BITMAP_9_BY_15, "LANDED SUCCESSFULLY!!", 0.0, 1.0, 0.0)
+    drawText(Vector2(WINDOW_WIDTH / 2 - (21*9+21)/2, WINDOW_HEIGHT / 2 + 50), GLUT_BITMAP_9_BY_15, "Press R to play again", 1.0, 1.0, 1.0)
+
+def drawFailCrashFastText():
+    drawText(Vector2(WINDOW_WIDTH / 2 - (33*9+33)/2, WINDOW_HEIGHT / 2 + 70), GLUT_BITMAP_9_BY_15, "CRASHED! Hit the ground too fast!", 1.0, 0.0, 0.0)
+    drawText(Vector2(WINDOW_WIDTH / 2 - (20*9+20)/2, WINDOW_HEIGHT / 2 + 50), GLUT_BITMAP_9_BY_15, "Press R to try again", 1.0, 1.0, 1.0)
+
+def drawFailCrashSidewaysText():
+    drawText(Vector2(WINDOW_WIDTH / 2 - (29*9+29)/2, WINDOW_HEIGHT / 2 + 70), GLUT_BITMAP_9_BY_15, "CRASHED! Didn't land upright!", 1.0, 0.0, 0.0)
+    drawText(Vector2(WINDOW_WIDTH / 2 - (20*9+20)/2, WINDOW_HEIGHT / 2 + 50), GLUT_BITMAP_9_BY_15, "Press R to try again", 1.0, 1.0, 1.0)
+
+def drawFailMissedLandingAreaText():
+    drawText(Vector2(WINDOW_WIDTH / 2 - (32*9+32)/2, WINDOW_HEIGHT / 2 + 70), GLUT_BITMAP_9_BY_15, "FAILED! Missed the landing area!", 1.0, 0.0, 0.0)
+    drawText(Vector2(WINDOW_WIDTH / 2 - (20*9+20)/2, WINDOW_HEIGHT / 2 + 50), GLUT_BITMAP_9_BY_15, "Press R to try again", 1.0, 1.0, 1.0)
+
+def drawText(position, font, text, r, g, b):
+    position = w2r(position)
+
+    glColor(r, g, b, 1.0)
+    glRasterPos2f(position.x, position.y)
+    for ch in text:
+        glutBitmapCharacter(font, ctypes.c_int(ord(ch)))
+    
+
 def render():
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     
@@ -416,14 +565,24 @@ def render():
     drawLandingArea()
     drawLander()
     drawFuelBar()
-    
+    drawControls()
+
+    if postGameState == PostGameState.success:
+        drawSuccessText()
+    elif postGameState == PostGameState.tooFast:
+        drawFailCrashFastText()
+    elif postGameState == PostGameState.sideways:
+        drawFailCrashSidewaysText()
+    elif postGameState == PostGameState.missedLandingArea:
+        drawFailMissedLandingAreaText()
+        
     glutSwapBuffers()
 
 # Initialise OpenGL window
 glutInit(sys.argv)
 glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_DEPTH | GLUT_MULTISAMPLE)
 glutInitWindowSize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-glutCreateWindow("SuperLander")
+glutCreateWindow("lander")
 
 def onWindowResize(width, height):
     global aspectRatio
@@ -437,7 +596,7 @@ def onWindowResize(width, height):
     global WINDOW_HEIGHT
 
     WINDOW_WIDTH = width
-    WINDOW_HEGHT = height
+    WINDOW_HEIGHT = height
 
 # Set GLUT function hooks
 glutKeyboardFunc(keyboardDown)
