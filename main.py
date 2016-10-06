@@ -9,19 +9,15 @@
 
 import sys
 
+# OpenGL module used for rendering graphics
 from OpenGL.GLUT import *
 from OpenGL.GLU  import *
 from OpenGL.GL   import *
 
-import copy
+from copy import copy
 import math
 import random
 from enum import Enum, IntEnum
-
-class GameState(Enum):
-    startScreen = 0
-    ingame = 1
-    postgame = 2
 
 class PostGameState(Enum):
     none = 0
@@ -41,7 +37,7 @@ class Vector2:
         self.y = y
 
 class Lander:    
-    startingFuel = 100
+    startingFuel = 80
     fuelConsumptionRate = 10 # fuel consumed per second
     
     thrusterStrength = 55 # make this larger than gravity!
@@ -53,6 +49,7 @@ class Lander:
     size = Vector2(20, 25)
     
     def __init__(self):
+        # default initialization values
         self.position = Vector2(random.randint(0, glutGet(GLUT_WINDOW_WIDTH)), glutGet(GLUT_WINDOW_HEIGHT)-20)
         self.velocity = Vector2(random.randint(-20, 20), 0)
         self.acceleration = Vector2(0, 0)
@@ -88,22 +85,22 @@ WINDOW_HEIGHT = 480
 
 aspectRatio = DEFAULT_WINDOW_WIDTH / DEFAULT_WINDOW_HEIGHT # dynamically changed on resize
 
-gameState = GameState.ingame
 postGameState = PostGameState.none
 
 keysDown = {}
 
-terrainPointDensity = 25 # lower numbers create more rocky terrain
 terrainMinHeight = 20
-terrainStartHeight = 100
-terrainMaxHeight = 400
-terrainVariationY = 10
+terrainMaxHeight = 250
+terrainVariationY = 10 # higher numbers create more rocky terrain
 terrainMinXSpacing = 12
 terrainMaxXSpacing = 15
-terrainPoints = []
+terrainPoints = [] # dynamic array that stores the current terrain map
 
 landingAreaPosition = Vector2(0,0) # top-left coordinate of the landing area
 landingAreaWidth = 0
+# the landing area is at least the width of the lander, plus some random value given by:
+landingAreaMinAdditionalWidth = 10 
+landingAreaMaxAdditionalWidth = 40
 
 gravity = -30
 
@@ -111,6 +108,8 @@ numStars = 300
 stars = []
 
 fuelParticles = []
+lastFuelParticle = 0 # counter used to time the release of fuel particles
+                     # (see update() function)
 
 fuelBarWidth = 20
 fuelBarHeight = 200
@@ -142,23 +141,24 @@ def createStars():
 
 def createTerrain():
     # terrain is created as a series of points on the surface
+    # first, clear previous terrain
     del terrainPoints[:]
 
+    # start with the first point on the far left of the screen
     firstPoint = Vector2(0, random.randint(terrainMinHeight, (terrainMaxHeight + terrainMinHeight)/2))
+    terrainPoints.append(firstPoint)
     
     global landingAreaPosition
     global landingAreaWidth
     # randomize landing area width to an extent
-    landingAreaWidth = Lander.size.x + random.randint(10, 40)
+    landingAreaWidth = Lander.size.x + random.randint(landingAreaMinAdditionalWidth, landingAreaMaxAdditionalWidth)
     # pick a random x position for the landing area
-    landingAreaPosition = Vector2(random.randint(0, glutGet(GLUT_WINDOW_WIDTH) - landingAreaWidth), 0)    
-    doneLandingArea = False
+    landingAreaPosition = Vector2(random.randint(0, glutGet(GLUT_WINDOW_WIDTH) - landingAreaWidth), 0)
 
-    terrainPoints.append(firstPoint)
-    
-    while (terrainPoints[-1].x < glutGet(GLUT_WINDOW_WIDTH)):
+    doneLandingArea = False
+    while (terrainPoints[-1].x < WINDOW_WIDTH):
         prevPoint = terrainPoints[-1]
-        point = copy.copy(prevPoint)
+        point = copy(prevPoint)
 
         # slightly randomize x position of next point
         point.x += random.randint(terrainMinXSpacing, terrainMaxXSpacing)
@@ -169,7 +169,7 @@ def createTerrain():
         if(point.x >= landingAreaPosition.x and not doneLandingArea):
             # move the point to exactly where the landing area was chosen
             point.x = landingAreaPosition.x
-            terrainPoints.append(copy.copy(point))
+            terrainPoints.append(copy(point))
             # create right side of landing area horizontally to the right
             terrainPoints.append(Vector2(point.x + landingAreaWidth, point.y))
 
@@ -179,7 +179,7 @@ def createTerrain():
             
         # create normal terrain point
         else:
-            terrainPoints.append(copy.copy(point))
+            terrainPoints.append(copy(point))
 
 def doCollisionDetection():
     # line intersection helper functions
@@ -195,12 +195,12 @@ def doCollisionDetection():
                      Vector2(lander.position.x + lander.size.x/2, lander.position.y - lander.size.y/2),
                      Vector2(lander.position.x - lander.size.x/2, lander.position.y - lander.size.y/2)]
 
-    # rotate corners
+    # take rotation of lander into account
     for i in range(len(landerCorners)):
         rotateAround(landerCorners[i], lander.position, -lander.rotation)
 
-    # collect the terrain points we need to analyse
-    # simple bounding box: terrain bisecting lander cannot be outside this range
+    # collect the terrain points we need to analyse:
+    # don't need to check for intersections of all terrain lines, just the ones below the lander
     minTerrainX = lander.position.x - max(lander.size.x, lander.size.y)/2 - max(terrainMaxXSpacing, landingAreaWidth)
     maxTerrainX = lander.position.x + max(lander.size.x, lander.size.y)/2 + max(terrainMaxXSpacing, landingAreaWidth)
 
@@ -221,31 +221,40 @@ def doCollisionDetection():
             lander1 = landerCorners[j]
             lander2 = landerCorners[j+1] if j < 3 else landerCorners[0]
 
+            # lander is touching the ground
             if (intersect(terrain1, terrain2, lander1, lander2)):
                 lander.hitGround = True
 
                 global postGameState
+                # hit the ground too fast
                 if (abs(lander.velocity.y) > Lander.maxLandingVelocity):
                     explodeLander()
                     postGameState = PostGameState.tooFast
+                # missed the landing area
                 elif (terrain1.x != landingAreaPosition.x):
                     explodeLander()
                     postGameState = PostGameState.missedLandingArea
+                # hit the ground at a steep angle
                 elif (abs(lander.rotation) > Lander.maxLandingRotation):
                     explodeLander()
                     postGameState = PostGameState.sideways
+                # successfully landed
                 else:
                     onSuccessfulLanding()
                     postGameState = PostGameState.success
-
+                    
                 return
 
 def onSuccessfulLanding():
+    # lock lander onto ground
     lander.rotation = 0
+    lander.position.y = landingAreaPosition.y + lander.size.y/2
 
 def explodeLander():
     lander.visible = False
+    lander.hitGround = True
 
+    # create explosion particles
     numExplosionParticles = 20
     for i in range(numExplosionParticles):
         fuelParticle = FuelParticle(lander.position.x, lander.position.y)
@@ -302,29 +311,39 @@ def tick():
     # Draw to the screen as fast as possible
     render()
 
-
-lastFuelParticle = 0
+# do game logic updates
 def update(lastUpdateTime, dt):
-    dt = dt / 1000 # convert dt to seconds (to work nicely with physics equations)
+    dt = dt / 1000 # convert dt from milliseconds to seconds
 
     if (not lander.hitGround):
         ### LANDER PHYSICS ###    
-        # using velocity verlet integration for more precision at a fixed timestep
+        # using velocity verlet integration for more precision at the fixed timestep
         lander.position.x += dt * (lander.velocity.x + dt * lander.acceleration.x / 2)
         lander.position.y += dt * (lander.velocity.y + dt * lander.acceleration.y / 2)
         
         # just euler integration for velocity
         lander.velocity.x += dt * lander.acceleration.x
         lander.velocity.y += dt * lander.acceleration.y
-        
+
         lander.rotation += lander.rotationVelocity
 
         # wrap rotation values
         while (lander.rotation >= 180):
             lander.rotation -= 360
-
         while (lander.rotation < -180):
             lander.rotation += 360
+
+        # wrap lander around screen edges
+        landerMaxEdge = max(Lander.size.x, Lander.size.y)/2
+        if (lander.position.x > WINDOW_WIDTH + landerMaxEdge):
+            lander.position.x = -landerMaxEdge
+        elif (lander.position.x < -landerMaxEdge):
+            lander.position.x = WINDOW_WIDTH + landerMaxEdge
+
+        # blow up lander if it somehow gets below the terrain:
+        if (lander.position.y < 0):
+            explodeLander()
+            postGameState = PostGameState.missedLandingArea
             
         # initialise default lander movement values
         lander.acceleration.x = 0
@@ -347,6 +366,7 @@ def update(lastUpdateTime, dt):
     ### LANDER CONTROLS ###
     # do not accept control if no fuel or touched ground
     if (lander.fuel <= 0):
+        # set exactly to 0 so UI displays as 0, not -1
         lander.fuel = 0
         return
     if (lander.hitGround):
@@ -356,7 +376,7 @@ def update(lastUpdateTime, dt):
     if (keysDown.get(SpecialKey.up)):
         lander.acceleration.x = Lander.thrusterStrength * math.sin(math.radians(lander.rotation))
         lander.acceleration.y = gravity + Lander.thrusterStrength * math.cos(math.radians(lander.rotation))
-        lander.fuel -= Lander.fuelConsumptionRate * dt # 10 fuel per second
+        lander.fuel -= Lander.fuelConsumptionRate * dt
 
         # create fuel particles
         global lastFuelParticle
@@ -379,28 +399,36 @@ def update(lastUpdateTime, dt):
         lander.rotationVelocity = Lander.sideThrusterStrength
         lander.fuel -= Lander.fuelConsumptionRate * dt * 0.5
 
-## DRAWING FUNCTIONS ##
+### DRAWING FUNCTIONS ###
+# heavy usage of OpenGL henceforth
+def drawText(position, font, text, r, g, b):
+    position = w2r(position)
+    
+    glColor(r, g, b, 1.0)
+    glRasterPos2f(position.x, position.y)
+    for ch in text:
+        glutBitmapCharacter(font, ctypes.c_int(ord(ch)))
         
 def drawTerrain():
     glBegin(GL_TRIANGLES)
-    glColor(0.65, 0.7, 0.7)
+    glColor(0.65, 0.7, 0.7) # greyish
     
     for i in range(len(terrainPoints)-1):
-        renderCoordinates = w2r(terrainPoints[i])
-        nextCoordinates = w2r(terrainPoints[i+1])
+        firstCoordinates = w2r(terrainPoints[i])
+        secondCoordinates = w2r(terrainPoints[i+1])
 
         # Terrain is a concave polygon, so it must be
-        # split into triangles:
+        # split into triangles to be drawn:
         
         # triangle 1
-        glVertex2f(renderCoordinates.x, renderCoordinates.y) # first terrain point
-        glVertex2f(nextCoordinates.x, nextCoordinates.y)     # second terrain point
-        glVertex2f(renderCoordinates.x, w2r(Vector2(0,0)).y) # bottom of screen below first terrain point
+        glVertex2f(firstCoordinates.x, firstCoordinates.y) # first terrain point
+        glVertex2f(secondCoordinates.x, secondCoordinates.y)     # second terrain point
+        glVertex2f(firstCoordinates.x, w2r(Vector2(0,0)).y) # bottom of screen below first terrain point
 
         # triangle 2
-        glVertex2f(renderCoordinates.x, w2r(Vector2(0,0)).y) # bottom of screen below first terrain point
-        glVertex2f(nextCoordinates.x, w2r(Vector2(0,0)).y)   # bottom of screen below second terrain point
-        glVertex2f(nextCoordinates.x, nextCoordinates.y)     # second terrain point
+        glVertex2f(firstCoordinates.x, w2r(Vector2(0,0)).y) # bottom of screen below first terrain point
+        glVertex2f(secondCoordinates.x, w2r(Vector2(0,0)).y)   # bottom of screen below second terrain point
+        glVertex2f(secondCoordinates.x, secondCoordinates.y)     # second terrain point
             
     glEnd()
 
@@ -410,9 +438,8 @@ def drawLandingArea():
 
     left = w2r(landingAreaPosition)
 
-    landingAreaPositionRight = copy.copy(landingAreaPosition)
+    landingAreaPositionRight = copy(landingAreaPosition)
     landingAreaPositionRight.x += landingAreaWidth
-
     right = w2r(landingAreaPositionRight)
 
     # draw first two points on surface
@@ -436,31 +463,33 @@ def drawLander():
                      Vector2(lander.position.x + lander.size.x/2, lander.position.y - lander.size.y/2),
                      Vector2(lander.position.x - lander.size.x/2, lander.position.y - lander.size.y/2)]
 
-    # rotate and convert corners to screen coordinates
     for i in range(len(landerCorners)):
+        # take rotation into account
         rotateAround(landerCorners[i], lander.position, -lander.rotation)
+        # convert coordinates to render coordinates
         landerCorners[i] = w2r(landerCorners[i])
 
+    # draw the rectangle
     glBegin(GL_POLYGON)
     glColor(1.0, 1.0, 1.0, 1.0)
     glVertex2f(landerCorners[0].x, landerCorners[0].y)
     glVertex2f(landerCorners[1].x, landerCorners[1].y)
-    glColor(0.7, 0.7, 0.7, 1.0)
+    glColor(0.7, 0.7, 0.7, 1.0) # slight vertical gradient
     glVertex2f(landerCorners[2].x, landerCorners[2].y)
     glVertex2f(landerCorners[3].x, landerCorners[3].y)
     glEnd()
-    
-    # glPopMatrix()
 
 def drawStars():
     glBegin(GL_POINTS)
     for i in range(numStars):
         opacity = stars[i][2]/100
-        glColor(opacity, opacity, opacity)
+        glColor(1.0, 1.0, 1.0, opacity)
         glVertex2f(aspectRatio*stars[i][0]/2000, stars[i][1]/2000)
     glEnd()
 
-# very similar to lander.. maybe i could create a drawRectangle function
+# this function is very similar to the drawLander function
+# if i could be bothered I would abstract some of this out to
+# a generic drawRectangle function
 def drawFuelParticles():
     for particle in fuelParticles:
 
@@ -476,7 +505,7 @@ def drawFuelParticles():
             rotateAround(fuelParticleCorners[i], particle.position, particle.rotation)
             fuelParticleCorners[i] = w2r(fuelParticleCorners[i])
 
-        # flicker colour every frame - cool effect
+        # flicker colour every frame - cool, fiery effect
         redFlicker = random.uniform(0.6, 0.9)
         greenFlicker = random.uniform(0.3, 0.6)
             
@@ -515,7 +544,8 @@ def drawFuelBar():
     glVertex2f(bottomRight.x, bottomRight.y)
     glVertex2f(bottomLeft.x, bottomLeft.y)
 
-    # fade top of fuel bar from yellow to red
+    # fade top of fuel bar from yellow to red depending on
+    # amount of fuel remaining
     glColor(1.0, fuelPercentage, 0.0)
     
     glVertex2f(barTopLeft.x, barTopLeft.y)
@@ -526,6 +556,16 @@ def drawFuelBar():
     fuelString = str(math.floor(lander.fuel))
     drawText(Vector2(20 + 10 + fuelBarWidth, WINDOW_HEIGHT - 20 - 10 - fuelBarHeight + barHeight),
              GLUT_BITMAP_9_BY_15, fuelString, 1.0, fuelPercentage, 0.0)
+
+### TEXT DRAWING FUNCTIONS ###
+
+def drawStatsText():
+    velocityTxt = "Velocity: " + str(-math.floor(lander.velocity.y))
+    angleTxt = "Rotation: " + str(math.floor(lander.rotation))
+    velocityColor = [1.0, 0.0, 0.0] if -lander.velocity.y > Lander.maxLandingVelocity else [0.0, 1.0, 0.0]
+    angleColor = [1.0, 0.0, 0.0] if abs(lander.rotation) > Lander.maxLandingRotation else [0.0, 1.0, 0.0]
+    drawText(Vector2(20, WINDOW_HEIGHT - 45 - fuelBarHeight), GLUT_BITMAP_9_BY_15, velocityTxt, *velocityColor)
+    drawText(Vector2(20, WINDOW_HEIGHT - 65 - fuelBarHeight), GLUT_BITMAP_9_BY_15, angleTxt, *angleColor)
 
 def drawControls():
     drawText(Vector2(WINDOW_WIDTH - 180, WINDOW_HEIGHT - 22), GLUT_BITMAP_9_BY_15, "Arrow keys to move", 1.0, 1.0, 1.0)
@@ -545,17 +585,9 @@ def drawFailCrashSidewaysText():
 
 def drawFailMissedLandingAreaText():
     drawText(Vector2(WINDOW_WIDTH / 2 - (32*9+32)/2, WINDOW_HEIGHT / 2 + 70), GLUT_BITMAP_9_BY_15, "FAILED! Missed the landing area!", 1.0, 0.0, 0.0)
-    drawText(Vector2(WINDOW_WIDTH / 2 - (20*9+20)/2, WINDOW_HEIGHT / 2 + 50), GLUT_BITMAP_9_BY_15, "Press R to try again", 1.0, 1.0, 1.0)
+    drawText(Vector2(WINDOW_WIDTH / 2 - (20*9+20)/2, WINDOW_HEIGHT / 2 + 50), GLUT_BITMAP_9_BY_15, "Press R to try again", 1.0, 1.0, 1.0)    
 
-def drawText(position, font, text, r, g, b):
-    position = w2r(position)
-
-    glColor(r, g, b, 1.0)
-    glRasterPos2f(position.x, position.y)
-    for ch in text:
-        glutBitmapCharacter(font, ctypes.c_int(ord(ch)))
-    
-
+# called as fast as possible
 def render():
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     
@@ -566,6 +598,7 @@ def render():
     drawLander()
     drawFuelBar()
     drawControls()
+    drawStatsText()
 
     if postGameState == PostGameState.success:
         drawSuccessText()
@@ -582,8 +615,10 @@ def render():
 glutInit(sys.argv)
 glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_DEPTH | GLUT_MULTISAMPLE)
 glutInitWindowSize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-glutCreateWindow("lander")
+glutCreateWindow("MOON LANDER XTREME") # window title
 
+# when the window is resized, expand the render coordinate grid,
+# don't stretch it!
 def onWindowResize(width, height):
     global aspectRatio
     aspectRatio = width / height
@@ -605,15 +640,21 @@ glutSpecialFunc(keyboardSpecialDown)
 glutSpecialUpFunc(keyboardSpecialUp)
 
 glutDisplayFunc(render)
-glutIdleFunc(tick)
+glutIdleFunc(tick) # main loop function
 glutReshapeFunc(onWindowResize)
 
+# enable opacity
 glEnable(GL_BLEND)
 glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+# background not quite black, slightly blueish
 glClearColor(0.0, 0.0, 0.05, 1.0)
 
-# initialize first game
+# initialize the first game
 lander = None
 restartGame()
 
+# GLUT handles the main loop for me
 glutMainLoop()
+
+# we made it!
