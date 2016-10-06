@@ -114,6 +114,7 @@ lastFuelParticle = 0 # counter used to time the release of fuel particles
 fuelBarWidth = 20
 fuelBarHeight = 200
 
+### SOME HELPER FUNCTIONS ###
 # w2r: converts world coordinates to render coordinates
 def w2r(coordinates):
     windowWidth = glutGet(GLUT_WINDOW_WIDTH)
@@ -131,6 +132,7 @@ def rotateAround(point, origin, angle):
 
     point.x = origin.x + trans.x
     point.y = origin.y + trans.y
+
 
 def createStars():
     del stars[:]
