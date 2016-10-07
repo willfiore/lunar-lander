@@ -14,9 +14,10 @@ from OpenGL.GLUT import *
 from OpenGL.GLU  import *
 from OpenGL.GL   import *
 
-from copy import copy
 import math
 import random
+
+from copy import copy
 from enum import Enum, IntEnum
 
 class PostGameState(Enum):
@@ -25,6 +26,7 @@ class PostGameState(Enum):
     tooFast = 2
     sideways = 3
     missedLandingArea = 4
+    starting = 5 # just easy to put this in here.. isn't really a post game state
 
 class SpecialKey(IntEnum):
     left = 100
@@ -64,7 +66,7 @@ class Lander:
 
 class FuelParticle:
     speed = 3
-    defaultLifetime = 0.5
+    defaultLifetime = 1
     defaultSize = 4
     
     def __init__(self, x, y):
@@ -78,6 +80,8 @@ class FuelParticle:
 
 ### GLOBALS ###
 
+TITLE = "MOON LANDER XTREME!!"
+
 DEFAULT_WINDOW_WIDTH  = 720
 DEFAULT_WINDOW_HEIGHT = 480
 WINDOW_WIDTH = 720
@@ -85,12 +89,13 @@ WINDOW_HEIGHT = 480
 
 aspectRatio = DEFAULT_WINDOW_WIDTH / DEFAULT_WINDOW_HEIGHT # dynamically changed on resize
 
-postGameState = PostGameState.none
+postGameState = PostGameState.starting
 
 keysDown = {}
 
 terrainMinHeight = 20
-terrainMaxHeight = 250
+terrainMaxHeight = 400
+terrainMaxStartingHeight = 200
 terrainVariationY = 10 # higher numbers create more rocky terrain
 terrainMinXSpacing = 12
 terrainMaxXSpacing = 15
@@ -147,7 +152,7 @@ def createTerrain():
     del terrainPoints[:]
 
     # start with the first point on the far left of the screen
-    firstPoint = Vector2(0, random.randint(terrainMinHeight, (terrainMaxHeight + terrainMinHeight)/2))
+    firstPoint = Vector2(0, random.randint(terrainMinHeight, (terrainMaxStartingHeight + terrainMinHeight)/2))
     terrainPoints.append(firstPoint)
     
     global landingAreaPosition
@@ -164,8 +169,15 @@ def createTerrain():
 
         # slightly randomize x position of next point
         point.x += random.randint(terrainMinXSpacing, terrainMaxXSpacing)
-        # y position randomized but close to previous point (and not exceeding max and min height)
-        point.y = random.randint(max(terrainMinHeight, prevPoint.y - terrainVariationY), min(terrainMaxHeight, prevPoint.y + terrainVariationY))
+        
+        # sometimes, create a y position with a much higher variation (adds more variety to terrain)
+        # but not too close to the left of the screen (to avoid overlapping the UI)
+        # otherwise just create a point with a normal amount of variation
+        variation = terrainVariationY
+        if not random.randrange(5) and point.x > 100:
+            variation *= 5
+        
+        point.y = random.randint(max(terrainMinHeight, prevPoint.y - variation), min(terrainMaxHeight, prevPoint.y + variation))
 
         # create landing area
         if(point.x >= landingAreaPosition.x and not doneLandingArea):
@@ -266,7 +278,16 @@ def explodeLander():
         fuelParticle.rotationVelocity = 1 if random.randrange(2) else -1
         fuelParticle.lifetime = FuelParticle.defaultLifetime*2
         fuelParticles.append(fuelParticle)
+
+def createInitialScreen():
+    global postGameState
+    postGameState = PostGameState.starting
+    createStars()
+    createTerrain()
+    respawnLander()
     
+    lander.hitGround = True
+    lander.visible = False
             
 def restartGame():
     global postGameState
@@ -573,6 +594,12 @@ def drawControls():
     drawText(Vector2(WINDOW_WIDTH - 180, WINDOW_HEIGHT - 22), GLUT_BITMAP_9_BY_15, "Arrow keys to move", 1.0, 1.0, 1.0)
     drawText(Vector2(WINDOW_WIDTH - 125, WINDOW_HEIGHT - 40), GLUT_BITMAP_9_BY_15, "R to restart", 1.0, 1.0, 1.0)
 
+def drawStartingText():
+    drawText(Vector2(WINDOW_WIDTH / 2 - (len(TITLE)*9+len(TITLE))/2, WINDOW_HEIGHT - 40), GLUT_BITMAP_9_BY_15, TITLE, 1.0, 1.0, 0.0)
+    drawText(Vector2(WINDOW_WIDTH / 2 - (15*9+15)/2, WINDOW_HEIGHT - 80), GLUT_BITMAP_9_BY_15, "Press R to play", 0.0, 1.0, 1.0)
+    drawText(Vector2(WINDOW_WIDTH / 2 - (26*9+26)/2, WINDOW_HEIGHT - 100), GLUT_BITMAP_9_BY_15, "Use the arrow keys to move", 1.0, 1.0, 1.0)
+    drawText(Vector2(WINDOW_WIDTH / 2 - (31*9+31)/2, WINDOW_HEIGHT - 120), GLUT_BITMAP_9_BY_15, "Land in the yellow landing area", 1.0, 1.0, 1.0)
+
 def drawSuccessText():
     drawText(Vector2(WINDOW_WIDTH / 2 - (21*9+21)/2, WINDOW_HEIGHT / 2 + 70), GLUT_BITMAP_9_BY_15, "LANDED SUCCESSFULLY!!", 0.0, 1.0, 0.0)
     drawText(Vector2(WINDOW_WIDTH / 2 - (21*9+21)/2, WINDOW_HEIGHT / 2 + 50), GLUT_BITMAP_9_BY_15, "Press R to play again", 1.0, 1.0, 1.0)
@@ -598,9 +625,11 @@ def render():
     drawTerrain()
     drawLandingArea()
     drawLander()
-    drawFuelBar()
-    drawControls()
-    drawStatsText()
+
+    if (postGameState != PostGameState.starting):
+        drawFuelBar()
+        drawControls()
+        drawStatsText()
 
     if postGameState == PostGameState.success:
         drawSuccessText()
@@ -610,6 +639,8 @@ def render():
         drawFailCrashSidewaysText()
     elif postGameState == PostGameState.missedLandingArea:
         drawFailMissedLandingAreaText()
+    elif postGameState == PostGameState.starting:
+        drawStartingText()
         
     glutSwapBuffers()
 
@@ -617,7 +648,7 @@ def render():
 glutInit(sys.argv)
 glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_DEPTH | GLUT_MULTISAMPLE)
 glutInitWindowSize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-glutCreateWindow("MOON LANDER XTREME") # window title
+glutCreateWindow(TITLE) # window title
 
 # when the window is resized, expand the render coordinate grid,
 # don't stretch it!
@@ -654,7 +685,7 @@ glClearColor(0.0, 0.0, 0.05, 1.0)
 
 # initialize the first game
 lander = None
-restartGame()
+createInitialScreen()
 
 # GLUT handles the main loop for me
 glutMainLoop()
